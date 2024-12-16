@@ -4,7 +4,12 @@
 #include <fstream>
 #include <gsl/gsl_sf_bessel.h>
 #include <sys/time.h>
+#ifdef __APPLE__
 #include <Accelerate/Accelerate.h>
+#else
+#include <cblas.h>
+#include <cstring>
+#endif
 /*
  1. calculation of line-picking probability density in the sampling area of radius R.
  2.
@@ -38,35 +43,35 @@ int q_size; // =
 int hist_size = 0;
 int v_hist_size;
 int v_hist_bin;
-int *v_hist;
+static int *v_hist;
 int h_hist_size = 0;
 int h_hist_bin;
-int *h_hist;
-float *bess_mat;
-int *hist; // counting the pairs at given distances
-float *normalized_hist = 0; // normalized by the total number of pairs
-float *normalized_hist0 = 0;
+static int *h_hist;
+static float *bess_mat;
+static int *hist; // counting the pairs at given distances
+static float *normalized_hist = 0; // normalized by the total number of pairs
+static float *normalized_hist0 = 0;
 //float *gr0 = 0;
-float *gr_ref = 0;
-float *gr0 = 0;
-float *gr1 = 0;
-float *gr2 = 0;
-float *corr0 = 0;
-float *corr1 = 0;
-float *corr2 = 0;
-float *nrm_ref = 0;
-float *nrm0 = 0;
-float *nrm1 = 0;
-float *nrm2 = 0;
+static float *gr_ref = 0;
+static float *gr0 = 0;
+static float *gr1 = 0;
+static float *gr2 = 0;
+static float *corr0 = 0;
+static float *corr1 = 0;
+static float *corr2 = 0;
+static float *nrm_ref = 0;
+static float *nrm0 = 0;
+static float *nrm1 = 0;
+static float *nrm2 = 0;
 
 ofstream *fo_corr0;
 ofstream *fo_corr1;
 ofstream *fo_corr2;
 
 
-float *line_picking = 0; //line_picking probability
-float *r_line_picking = 0; // inverse of line_picking probability for normalization
-float *sf = 0;
+static float *line_picking = 0; //line_picking probability
+static float *r_line_picking = 0; // inverse of line_picking probability for normalization
+static float *sf = 0;
 
 char filename[255];
 
@@ -86,7 +91,7 @@ typedef struct pos{
     double x, y;
     int address; // the tile position
 } position_structure;
-position_structure *disc_centers;
+static position_structure *disc_centers;
 
 default_random_engine generator;
 normal_distribution<double> *distribution;
@@ -130,7 +135,7 @@ int pbc(int i, double &shift) //periodic boundary condition
     return i;
 }
 
-int vertical_histogram()
+void vertical_histogram()
 {
     memset(v_hist, 0, box_size * sizeof(int));
     for(int i = 0; i< n; i++){
@@ -138,14 +143,14 @@ int vertical_histogram()
     }
 }
 
-int horizontal_histogram()
+void horizontal_histogram()
 {
     memset(h_hist, 0, box_size * sizeof(int));
     for(int i = 0; i< n; i++){
         h_hist[int((disc_centers[i].x)/h_hist_bin)]++;
     }
 }
-int horizontal_histogram(ofstream &fo)
+void horizontal_histogram(ofstream &fo)
 {
     horizontal_histogram();
     fo.write(reinterpret_cast<char *>(h_hist), sizeof(int)*h_hist_size);
@@ -263,7 +268,7 @@ int rounding_number_of_discs(double p, int s)
     return rounding_number_of_discs();
 }
 
-int histogram_alloc()
+void histogram_alloc()
 {
     hist_size = box_size*r_division;
     v_hist_size = box_size/v_hist_bin;
@@ -321,7 +326,7 @@ void init_box()
     for(int i = 0; i < address_size;i++) address_keeper[i]= -1;
 }
 
-int init_bess_mat()
+void init_bess_mat()
 {
     /*
      q_step = 2./box_size;
@@ -465,7 +470,7 @@ int dump_hist(const char filename[])
     return 0;
 }
 
-int dump(float *hist, const char filename[])
+void dump(float *hist, const char filename[])
 {
     ofstream fo(filename);
     fo.write(reinterpret_cast<char *>(hist), sizeof(float)*hist_size);
@@ -518,7 +523,7 @@ int calc_gr(float *p, float *gr)
     return 0;
 }
 
-int calc_sf(float  *gr)
+void calc_sf(float  *gr)
 {
     double scale = r_step *2*M_PI* number_density;
     cout << "scale "<< scale <<endl;
@@ -600,6 +605,7 @@ int tune()
         step_factor *=0.8;
         realloc_normal_distribution(step_factor);
     }
+    return 0;
 }
 
 int allocate_float(float **ptr, int n)
@@ -628,7 +634,7 @@ void permutate_arrays()
     nrm0 = tmp;
 }
 
-float calc_nrm(float *gr, int seg_len, int n_corr_seg, float *nrm){
+void calc_nrm(float *gr, int seg_len, int n_corr_seg, float *nrm){
     float *gr_ptr = gr;
     for(int i = 0; i < n_corr_seg; i++, gr_ptr += seg_len){
         nrm[i] = cblas_snrm2(seg_len, gr_ptr, 1);
