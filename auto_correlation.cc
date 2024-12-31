@@ -49,7 +49,10 @@ void calc_t_corr(float *c, int dt, int nt,  float *gr, int r_size, int seg_len, 
     for(int i = 0; i < nt-dt; i++){
         add_corr(c, gr+i*r_size, gr+(i+dt)*r_size, seg_len, n_corr_seg );
     }
+    double scale = 1./(nt-dt);
+    for(int i = 0; i < n_corr_seg; i++) c[i] *= scale;
 }
+
 
 int main(int argc, char *argv[])
 {
@@ -58,7 +61,7 @@ int main(int argc, char *argv[])
     int seg_len = 100;
     int n_corr_seg = 50;
     float *gr = new float[r_size*nt];
-    ifstream fi("gr");
+    ifstream fi(argv[1]);
     fi.read(reinterpret_cast <char *>(gr), r_size *nt*sizeof(float));
     float *corr = new float[500*n_corr_seg];
     memset(corr, 0, 500*n_corr_seg*sizeof(float));

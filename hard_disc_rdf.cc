@@ -1,7 +1,21 @@
+##Copyright 2024 Yoshiharu Nishiyama
+/*
+ This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation version 3 of the License.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+ The GNU General Public License  is found <https://www.gnu.org/licenses/>.
+ */
+
+/*
+ This program runs a Monte Carlo simulation of hard disks in 2D and saves reduced pair distribution function G(r) = 4pi r rho_0[g(r)-1].
+ */
+
 #include <math.h>
 #include <random>
 #include <iostream>
 #include <fstream>
+#include <string>
 #include <gsl/gsl_sf_bessel.h>
 #include <sys/time.h>
 #ifdef __APPLE__
@@ -25,9 +39,8 @@ double circle_area;//
 int n; // number of particles
 int n_iteration; // basic unit of iteration
 double number_density; // number density in the square box
-double number_density1; // number density in the sampling circle
 double a; //starting center_to_center distance
-int ix, iy;
+int nx, ny;
 double x_step;
 double y_step;
 int n1; // real number of particles
@@ -105,19 +118,6 @@ int distance_check(int k)
 {
     double x = disc_centers[k].x + jump_x - new_x;
     double y = disc_centers[k].y + jump_y - new_y;
-    if(x < -10) {
-        cerr <<x  << " "<<jump_x <<" "<< new_x <<" "<< k;
-        exit(0);
-    }
-    if(x > 10) {
-        cerr << x << " "<<jump_x <<" "<< new_x <<" "<< k;
-        exit(0);
-    }
-    if(y < -10 || y > 10) {
-        cerr << "y "<<y << " "<<jump_y <<" "<< new_y <<" "<< k;
-        exit(0);
-    }
-    
     double D = x*x+y*y;
     return x*x+y*y < 4; // true if the distance is closer than 2.
 }
@@ -157,6 +157,14 @@ void horizontal_histogram(ofstream &fo)
     fo.write(reinterpret_cast<char *>(h_hist), sizeof(int)*h_hist_size);
 }
 
+int check_i(int i, int ix, int j1)
+{
+    int i1 = pbc(ix+i, jump_x);
+    int k = address_keeper[i1+j1];
+    if (k== -1) return 0;
+    else return distance_check(k);
+}
+
 int test_move(position_structure &pos){
     new_x = pos.x + (*distribution)(generator);
     new_y = pos.y + (*distribution)(generator);
@@ -167,22 +175,28 @@ int test_move(position_structure &pos){
     // now the new_x and new_y is between 0 and box_size
     int ix = int(new_x* sqrt2_2);
     int iy = int(new_y* sqrt2_2);
-    // the tile size is sqrt(2)/2
+    // the tile size is sqrt(2)/2 so that only one disc can be in a tile
     int new_address = ix + address_lda * iy;
     int i_old = pos.address%address_lda;
     int j_old = pos.address/address_lda;
+    if(new_address != pos.address && address_keeper[new_address]!=-1) return 0;
     for(int j = -2; j != 3; j++){
         int j1 = pbc(iy+j, jump_y);
         j1 *= address_lda;
+        int j2 = j*j;
         for(int i = -2; i !=3; i++){
+            if(i==0 && j ==0) continue;
+            if((i*i+j2)>7) continue;
             int i1 = pbc(ix + i, jump_x);
-            int k =address_keeper[i1 + j1];
-            if( k != -1 &&  (i1 + j1) !=pos.address) {
+            int address =i1 + j1;
+            int k =address_keeper[address];
+            if( k != -1 &&  address !=pos.address) {
                 if(distance_check(k))
                     return 0;
             }
         }
     }
+
     accept_count++;
     pos.x = new_x;
     pos.y = new_y;
@@ -192,12 +206,12 @@ int test_move(position_structure &pos){
 
 int fill_initial_position()
 {
-    x_step = box_size/(double)ix;
-    y_step = box_size/(double)iy;
+    x_step = box_size/(double)nx;
+    y_step = box_size/(double)ny;
     double x_step05 = x_step*0.5;
     int count = 0;
-    for(int j = 0; j < iy; j++){
-        for (int i = 0; i < ix; i++, count++){
+    for(int j = 0; j < ny; j++){
+        for (int i = 0; i < nx; i++, count++){
             double x = i*x_step;
             if (j%2) x += x_step05;
             disc_centers[count].x = x;
@@ -216,18 +230,16 @@ int fill_initial_position()
 void calc_center_to_center()
 {
     area = box_size*box_size;
-    circle_area = area*M_PI*0.25;
-    n = area/M_PI*phi;
-    a = box_size / sqrt(n*sqrt3_2);
+    a = sqrt(2*M_PI/phi/sqrt(3.));
 }
 
 int rounding_number_of_discs()
 {
     calc_center_to_center();
     cout << "initial number of cylinders "<< n<< endl;
-    ix = box_size / a;
-    iy = box_size / a / sqrt3_2;
-    n = ix * iy;
+    nx = box_size / a;
+    ny = box_size / a / sqrt3_2;
+    n = nx * ny;
     cout << "update number of cylinders "<< n<< endl;
     phi = n*M_PI/area;
     cout << "update phi "<< phi<< endl;
@@ -258,7 +270,7 @@ void histogram_alloc()
 int allocate_centers()
 {
     if(flat_distribution) delete flat_distribution;
-    flat_distribution = new uniform_int_distribution<std::mt19937::result_type> (0,n);
+    flat_distribution = new uniform_int_distribution<std::mt19937::result_type> (0,n-1);
     if (disc_centers) delete[] disc_centers;
     disc_centers = new position_structure[n];
     return 0;
@@ -267,11 +279,21 @@ int allocate_centers()
 void allocate_normal_distribution (double x)
 {
     if(distribution) delete distribution;
-    distribution = new normal_distribution<double> (0, x*(0.2*a-1)); // half the space between cylinders
+    distribution = new normal_distribution<double> (0, x*(0.5*a-1)); // half the space between cylinders
 }
 
-void init_box()
+void init_box(int s, int r_div)
 {
+    box_size = s;
+    r_division = r_div;
+    r_max = box_size;
+    q_max = r_division;
+    r_step = 1./q_max;
+    r_size = r_division * box_size;// = r_max/r_step;
+    q_step = 1./r_max;
+    q_size = r_division * box_size;//q_max/q_step;
+    histogram_alloc();
+
     radius2 = box_size * 0.5;
     center_x = radius2;
     center_y = radius2;
@@ -285,25 +307,15 @@ void init_box()
 
 int init(double p, int s, int r_div)
 {
-    box_size = s;
+    init_box(s, r_div);
+
     phi = p;
-    r_division = r_div;
-    r_max = box_size;
-    q_max = r_division;
-    r_step = 1./q_max;
-    r_size = r_division * box_size;// = r_max/r_step;
-    q_step = 1./r_max;
-    q_size = r_division * box_size;//q_max/q_step;
-    
-    init_box();
     rounding_number_of_discs();
     cout << r_size<<" "<<q_size<<endl;
-    histogram_alloc();
     allocate_centers();
     cout << "number of disc "<<n << endl;
     cout <<" center to center dist "<< a <<endl;
     fill_initial_position();
-    
     return 0;
 }
 
@@ -364,7 +376,6 @@ long int accumulate_hist()
         
     }
     delete[] in;
-    number_density1 = m/circle_area;
     return m;
 }
 
@@ -382,7 +393,6 @@ void dump(float *hist, const char filename[])
     ofstream fo(filename);
     fo.write(reinterpret_cast<char *>(hist), sizeof(float)*hist_size);
 }
-
 
 int hist_normalize(float *n_hist, double scale)
 {
@@ -439,53 +449,61 @@ void dump_positions(char filename[])
 {
     ofstream fo(filename);
     fo.write(reinterpret_cast<char *> (&n), sizeof(int));
+    fo.write(reinterpret_cast<char *> (&address_size), sizeof(int));
     for(int i = 0; i < n; i++){
         fo.write(reinterpret_cast<char *>(&(disc_centers[i])), sizeof(position_structure));
+//        fo.write(reinterpret_cast<char *>(&(disc_centers[i].x)), sizeof(float));
+//        fo.write(reinterpret_cast<char *>(&(disc_centers[i].x)), sizeof(float));
+
     }
-    
+    fo.write(reinterpret_cast<char *> (address_keeper), sizeof(int)*address_size);
 }
 void read_positions(char filename[])
 {
     ifstream fi(filename);
     fi.read(reinterpret_cast<char *>(&n), sizeof(int));
+    fi.read(reinterpret_cast<char *> (&address_size), sizeof(int));
+    cout <<"n addres_size: "<<n <<" "<<address_size <<endl;
     if(disc_centers) delete [] disc_centers;
     disc_centers = new position_structure[n];
+    if(address_keeper) delete [] address_keeper;
+    address_keeper = new int [address_size];
+    
     for(int i = 0; i < n; i++){
         fi.read(reinterpret_cast<char *>(&(disc_centers[i])), sizeof(position_structure));
     }
+    fi.read(reinterpret_cast<char *>(address_keeper), sizeof(int) * address_size);
+
+    if(flat_distribution) delete flat_distribution;
+    flat_distribution = new uniform_int_distribution<std::mt19937::result_type> (0,n-1);
+
+    for(int i = 0; i < 10; i++){
+        cout << i <<" "<<disc_centers[i].x<< " "<<disc_centers[i].y<<" "<<disc_centers[i].address<<endl;
+    }
+    for(int i = 0; i < 10; i++){
+        cout << i <<" "<<disc_centers[n-10+i].x<< " "<<disc_centers[n-10+i].y<<" "<<disc_centers[n-10+i].address<<endl;
+    }
+    a = box_size / sqrt(n*sqrt3_2);
+    cout << "a  "<<a << endl;
+    float area = box_size*box_size;
+    phi =M_PI*n/area;
+    cout << "phi = " <<phi <<endl;
+    
 }
 
 int run(float *gr)
 {
     
     struct timespec start, end;
-//    ios_base::sync_with_stdio(false);
-
     memset(hist, 0, hist_size*sizeof(int));
     int sum;
-    
-//    clock_gettime(CLOCK_MONOTONIC, &start);
-    cout << n_iteration<<endl;
     move_ntimes(n_iteration);
-//    clock_gettime(CLOCK_MONOTONIC, &end);
-//    double time_taken = (end.tv_sec - start.tv_sec);
-//    cout << "shuffle : " <<  time_taken << endl;
-  
-    clock_gettime(CLOCK_MONOTONIC, &start);
     sum = accumulate_hist();
-    cout <<"sum "<< sum <<endl;
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    double time_taken = (end.tv_sec - start.tv_sec);
-    cout << "accumulate hist : " <<  time_taken << endl;
+    double sum1 = phi * box_size*box_size*0.25;
     double sum2 = sum*((sum-1)*0.5);
-    cout <<"sum2 "<< sum2<<endl;
-    hist_normalize(normalized_hist, 1./sum2);
-//    clock_gettime(CLOCK_MONOTONIC, &start);
-    cout << "normalized"<<endl;
-    cout<< "hist size "<<hist_size<<endl;
-    cout <<gr <<endl;
+    double sum21 = sum1*((sum1-1)*0.5);
+    hist_normalize(normalized_hist, 1./sum21);
     calc_gr(normalized_hist, gr);
-    cout << "gr_calculated"<< endl;
      
     return 0;
 }
@@ -494,6 +512,7 @@ double rejection_ratio()
 {
     reject_count = 0;
     accept_count = 0;
+    cout<< n_iteration<<endl;
     move_ntimes(n_iteration);
     double r_ratio =reject_count*1.0/(reject_count + accept_count);
     cout << "rejection ratio "<< r_ratio <<endl;
@@ -503,50 +522,181 @@ double rejection_ratio()
 int tune()
 {
     n_iteration = n*10;
+    cout << "tuning"<<endl;
     while(rejection_ratio() > 0.5) {
+        cout << "step _factor "<<step_factor<<endl;
         step_factor *=0.8;
         allocate_normal_distribution(step_factor);
     }
     return 0;
 }
 
-
-int main(int argc, char *argv[])
+void run_MC(int n_iter, int n_cycle0, int n_cycle1, char gr_file[], char pos_file[])
 {
-    v_hist_bin = 10; //for diagnosis horizontal fluctuation
-    h_hist_bin = 10; //for diagnosis vertical fluctuation
-    
-    init(0.6, 500, 10); // phi, box)size,  r_div = 10; q_step = 0.5/box_size, q_size = box_size*rdiv;
+    random_device dev;
+    rng = new mt19937(dev());
+    n_iteration = n*n_iter;
+
+    allocate_float(&gr, r_size);
+    allocate_normal_distribution(1.);
+    cout <<"tuning"<<endl;
+    tune();
+    cout << "step_factor : "<< step_factor <<endl;
+    n_iteration = n * n_iter;
+    struct timespec start, end;
+    for(int k = 0; k < n_cycle0; k++){
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        for(int i = 0; i < n_cycle1; i++){
+            move_ntimes(n_iteration);
+        }
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        double time_taken = (end.tv_sec - start.tv_sec);
+        printf("%4d /%d %5.4f\n", k, n_cycle0, time_taken);
+   }
+    ofstream fo(gr_file);
+    for(int k = 0; k < n_cycle0; k++){
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        for(int i = 0; i < n_cycle1; i++){
+            run(gr);
+            fo.write(reinterpret_cast<char *>(gr), sizeof(float)*r_size);
+        }
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        double time_taken = (end.tv_sec - start.tv_sec);
+        printf("%4d /%d %5.4f \n", k, n_cycle0, time_taken);
+    }
+    dump_positions(pos_file);
+}
+
+void run_MC1(int n_iter, int n_cycle0, int n_cycle1, char gr_file[], char pos_file[])
+{
+    random_device dev;
+    rng = new mt19937(dev());
+    n_iteration = n*10;
+
+    allocate_float(&gr, r_size);
+    allocate_normal_distribution(1.);
+    cout <<"tuning"<<endl;
+    tune();
+    cout << "step_factor : "<< step_factor <<endl;
+    n_iteration = n*n_iter;
+    struct timespec start, end;
+    ofstream fo(gr_file);
+    for(int k = 0; k < n_cycle0; k++){
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        for(int i = 0; i < n_cycle1; i++){
+            run(gr);
+            fo.write(reinterpret_cast<char *>(gr), sizeof(float)*r_size);
+        }
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        double time_taken = (end.tv_sec - start.tv_sec);
+        printf("%4d /%d %5.4f \n", k, n_cycle0, time_taken);
+    }
+    dump_positions(pos_file);
+}
+
+
+void run_from_scratch(double phi_, int box_size_, int r_div_,
+    int n_iter, int n_cycle0, int n_cycle1, char gr_file[], char pos_file[])
+{
+    init(phi_, box_size_, r_div_); // phi, box)size,  r_div = 10; q_step = 0.5/box_size, q_size = box_size*rdiv;
     line_picking_init();
     ofstream fo1("line_picking.dat");
     fo1.write(reinterpret_cast<char *>(line_picking), sizeof(float)*hist_size);
     fo1.close();
     cout << "line picked"<<endl;
-    
-    random_device dev;
-    rng = new mt19937(dev());
-    n_iteration = n*10;
-    allocate_float(&gr, r_size);
-    allocate_normal_distribution(1.);
-    tune();
-    cout << "step_factor : "<< step_factor <<endl;
-    n_iteration = n*10;
-    struct timespec start, end;
-    for(int k = 0; k < 10; k++){
-        clock_gettime(CLOCK_MONOTONIC, &start);
-        for(int i = 0; i < 100; i++){
-            move_ntimes(n_iteration);
+    run_MC(n_iter, n_cycle0, n_cycle1, gr_file, pos_file);
+}
+
+void run_from_pos(char in_pos_file[], int box_size_, int r_div_, int n_iter, int n_cycle0, int n_cycle1, char gr_file[], char out_pos_file[])
+{
+    init_box(box_size_, r_div_);
+    line_picking_init();
+
+    cout << "box  initialized"<<endl;
+    read_positions(in_pos_file);
+    cout << "pos OK"<<endl;
+    run_MC1(n_iter, n_cycle0, n_cycle1, gr_file, out_pos_file);
+}
+
+int main(int argc, char *argv[])
+{
+    v_hist_bin = 10; //for diagnosis horizontal fluctuation
+    h_hist_bin = 10; //for diagnosis vertical fluctuation
+    opterr = 0;
+
+    double phi_ = 0.7;
+    int box_size_ = 500;
+    int r_div_ = 10;
+    int n_iter = 10;
+    int n_cycle0 = 10;
+    int n_cycle1 = 100;
+    char *inputfile_ = NULL;
+    char gr_file0[] = "gr.dat";
+    char put_file0[] = "pos.dat";
+    char *gr_file_ = gr_file0;
+    char *out_file_ = put_file0;
+
+    char c;
+    while ((c = getopt (argc, argv, "p:l:d:i:c:t:g:o:f:")) != -1)
+        switch (c)
+        {
+            case 'p':
+                phi_ = atof(optarg); // packing density
+                break;
+            case 'l':
+                box_size_ = atoi(optarg); // box_size
+                break;
+            case 'd':
+                r_div_ = atoi(optarg); // division of radius
+                break;
+            case 'i':
+                n_iter = atoi(optarg); // number of iteration par particle
+                break;
+            case 'c': //number of cycles
+                n_cycle0 = atoi(optarg);
+                break;
+            case 't': //
+                n_cycle1 = atoi(optarg); // c times
+                cout << "t  = "<<n_cycle1<<endl;
+                break;
+            case 'g':
+                gr_file_ = optarg;
+                cout << "gr  = "<<gr_file_<<endl;
+                break;
+            case 'o':
+                out_file_ = optarg;
+                cout << "output position file  = "<<out_file_<<endl;
+                break;
+            case 'f':
+                inputfile_ = optarg;
+                cout << "input position file  = "<<inputfile_<<endl;
+                break;
+
+            case '?':
+                if (optopt == 'c')
+                    fprintf (stderr, "Option -%c requires an argument.\n", optopt);
+                else if (isprint (optopt))
+                    fprintf (stderr, "Unknown option `-%c'.\n", optopt);
+                else
+                    fprintf (stderr,
+                             "Unknown option character `\\x%x'.\n",
+                             optopt);
+                return 1;
+            default:
+                abort ();
         }
-        clock_gettime(CLOCK_MONOTONIC, &end);
-        double time_taken = (end.tv_sec - start.tv_sec);
-         cout << k <<"/10  "<< time_taken<<endl;
-   }
-    ofstream fo("gr6");
-    for(int i = 0; i < 1000; i++){
-        run(gr);
-        fo.write(reinterpret_cast<char *>(gr), sizeof(float)*r_size);
+    cout << " phi = " << phi_<<endl;
+    cout << "box size = "<<box_size_<<endl;
+    cout << "r_division  = "<<r_div_<<endl;
+    cout << "n_iter  = "<<n_iter<<endl;
+    cout << "n_cycle0  = "<<n_cycle0<<endl;
+    cout << "n_cycle1  = "<<n_cycle1<<endl;
+    cout << "gr_file  = "<<gr_file_<<endl;
+    cout<< "out_file = "<< out_file_<<endl;
+    if(inputfile_){
+        run_from_pos(inputfile_, box_size_, r_div_, n_iter, n_cycle0, n_cycle1, gr_file_, out_file_);
+    }else{
+        run_from_scratch(phi_, box_size_, r_div_, n_iter, n_cycle0, n_cycle1, gr_file_, out_file_);
     }
-    dump_positions("pos6");
-    return 0;
 }
 
